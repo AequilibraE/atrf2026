@@ -2,3 +2,5 @@ pyrosm
 geopandas
 pandas
 aequilibrae
+ipywidgets
+lonboard
