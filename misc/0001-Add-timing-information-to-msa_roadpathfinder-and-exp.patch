@@ -1,41 +1,29 @@
-From e35d66be2de2e546ba9bba03139b72937c0fe4b4 Mon Sep 17 00:00:00 2001
-From: Jake Moss <jake@outerloop.io>
-Date: Tue, 12 May 2026 09:59:44 +1000
-Subject: [PATCH] Add timing information to msa_roadpathfinder and
- expanded_roadpathfinder
-
----
- quetzal/engine/road_pathfinder.py | 13 +++++++++++--
- quetzal/model/transportmodel.py   |  5 +++--
- 2 files changed, 14 insertions(+), 4 deletions(-)
-
 diff --git a/quetzal/engine/road_pathfinder.py b/quetzal/engine/road_pathfinder.py
-index aea86df..d14d2b4 100644
+index 2b4f5af..b4a5af3 100644
 --- a/quetzal/engine/road_pathfinder.py
 +++ b/quetzal/engine/road_pathfinder.py
-@@ -19,6 +19,9 @@ from quetzal.engine.msa_utils import (
+@@ -19,6 +19,8 @@ from quetzal.engine.msa_utils import (
  )
- from typing import List, Dict, Tuple
+ from typing import List, Dict, Tuple, Optional
  
 +import time
-+
 +
  # base vdf
  free_flow = 'time'
  default_bpr = 'time * (1 + {alpha} * (flow/capacity)**{beta})'.format(alpha=0.15, beta=4)
-@@ -410,9 +413,11 @@ def msa_roadpathfinder(
+@@ -412,9 +414,11 @@ def msa_roadpathfinder(
          segment_odv[seg] = odv
  
      relgap = np.inf
 +    start_time = time.perf_counter()
      relgap_list = []
      phi = 1  # first iteration is AON
-     beta = [1, 0, 0]  # bfw coefficients
+     beta = [1.0, 0, 0]  # bfw coefficients
 +    times_list = []
      print('it  |  Phi    |  Rel Gap (%)') if log else None
      # note: first iteration i == 0 is AON to initialized.
      for i in range(maxiters + 1):
-@@ -440,6 +445,7 @@ def msa_roadpathfinder(
+@@ -442,6 +446,7 @@ def msa_roadpathfinder(
          #
          if i > 0:  # Skip first iteration (AON and relgap = -inf)
              relgap = get_relgap(links, segments)
@@ -43,7 +31,7 @@ index aea86df..d14d2b4 100644
              relgap_list.append(relgap)
              print(f'{i:2}  |  {phi:.3f}  |  {relgap:.8f} ') if log else None
  
-@@ -508,7 +514,7 @@ def msa_roadpathfinder(
+@@ -510,7 +515,7 @@ def msa_roadpathfinder(
  
      links = links.set_index(['a', 'b'])  # go back to original indexes
  
@@ -52,7 +40,7 @@ index aea86df..d14d2b4 100644
  
  
  def expanded_roadpathfinder(
-@@ -606,10 +612,12 @@ def expanded_roadpathfinder(
+@@ -608,10 +613,12 @@ def expanded_roadpathfinder(
          segment_origins[seg] = origins
          segment_odv[seg] = odv
  
@@ -65,7 +53,7 @@ index aea86df..d14d2b4 100644
      print('it  |  Phi    |  Rel Gap (%)') if log else None
      # note: first iteration i == 0 is AON to initialized.
      for i in range(maxiters + 1):
-@@ -637,6 +645,7 @@ def expanded_roadpathfinder(
+@@ -639,6 +646,7 @@ def expanded_roadpathfinder(
          #
          if i > 0:  # Skip first iteration (AON and relgap = -inf)
              relgap = get_relgap(links, segments)
@@ -73,17 +61,17 @@ index aea86df..d14d2b4 100644
              relgap_list.append(relgap)
              print(f'{i:2}  |  {phi:.3f}  |  {relgap:.8f}') if log else None
  
-@@ -715,4 +724,4 @@ def expanded_roadpathfinder(
+@@ -717,4 +725,4 @@ def expanded_roadpathfinder(
              lambda ls: expanded_path_to_nodes(ls, links_to_nodes, add_zones=not keep_connectors)
          )
  
 -    return links, car_los, relgap_list
 +    return links, car_los, relgap_list, times_list
 diff --git a/quetzal/model/transportmodel.py b/quetzal/model/transportmodel.py
-index dc184fc..17b5a8e 100644
+index 90df055..fc46519 100644
 --- a/quetzal/model/transportmodel.py
 +++ b/quetzal/model/transportmodel.py
-@@ -279,7 +279,7 @@ class TransportModel(optimalmodel.OptimalModel, parkridemodel.ParkRideModel):
+@@ -284,7 +284,7 @@ class TransportModel(optimalmodel.OptimalModel, parkridemodel.ParkRideModel):
  
          # elif method in ['msa', 'fw', 'bfw']:
          if turn_penalties is None:
@@ -92,7 +80,7 @@ index dc184fc..17b5a8e 100644
                  network,
                  volumes,
                  segments=segments,
-@@ -291,7 +291,7 @@ class TransportModel(optimalmodel.OptimalModel, parkridemodel.ParkRideModel):
+@@ -296,7 +296,7 @@ class TransportModel(optimalmodel.OptimalModel, parkridemodel.ParkRideModel):
                  **kwargs,
              )
          else:
@@ -101,7 +89,7 @@ index dc184fc..17b5a8e 100644
                  network,
                  volumes,
                  segments=segments,
-@@ -341,6 +341,7 @@ class TransportModel(optimalmodel.OptimalModel, parkridemodel.ParkRideModel):
+@@ -346,5 +346,6 @@ class TransportModel(optimalmodel.OptimalModel, parkridemodel.ParkRideModel):
          if assign_on_connectors:
              self.zone_to_road = _connectors
          self.relgap = rel_gap
@@ -109,6 +97,3 @@ index dc184fc..17b5a8e 100644
  
      @track_args
      def step_pr_pathfinder(self, force=False, path_analysis=True, **kwargs):
--- 
-2.43.0
-
