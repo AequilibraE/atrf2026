@@ -9,7 +9,7 @@ import geopandas as gpd
 import ipywidgets as widgets
 import numpy as np
 import pandas as pd
-from lonboard import Map, PathLayer, PolygonLayer, ScatterplotLayer
+from lonboard import ColumnLayer, Map, PathLayer, PolygonLayer, ScatterplotLayer
 from shapely.geometry import Point
 
 MAP_HEIGHT = 900
@@ -28,6 +28,7 @@ ROUTE_COLOURS = (
 )
 SHARED_COLOUR = (33, 121, 121)
 METHOD_COLOURS = {"BFSLE": (182, 79, 26), "LP": (120, 66, 156)}
+ZONE_LABELS = {"zone_id": "Zone ID", "sa1_code_2021": "SA1 code"}
 
 
 def _map_styles():
@@ -35,7 +36,7 @@ def _map_styles():
     css = (
         str(Map._css)
         + """
-    .mount-isa-map .deck-widgets-root {
+    .workshop-map .deck-widgets-root {
         position: absolute;
         inset: 0;
         pointer-events: none;
@@ -49,7 +50,7 @@ def _map_styles():
     return (
         css
         + f"""
-    .mount-isa-map .deck-widgets-root::after {{
+    .workshop-map .deck-widgets-root::after {{
         content: "";
         position: absolute;
         top: 12px;
@@ -66,22 +67,153 @@ def _map_styles():
 
 
 class WorkshopMap(Map):
+    """Use the workshop's tooltip and brand styling."""
+
     _css = _map_styles()
 
+    def __init__(self, layers, **kwargs):
+        super().__init__(layers, **kwargs)
+        self.add_class("workshop-map")
 
-def _map_view(projected_geometry, width=460):
+
+def make_zone_layer(zone_data):
+    """Draw the workshop's zone boundaries and highlight zones on hover."""
+    return PolygonLayer.from_geopandas(
+        zone_data,
+        get_fill_color=[57, 125, 137, 25],
+        get_line_color=[67, 117, 129, 210],
+        stroked=True,
+        line_width_units="pixels",
+        get_line_width=1.3,
+        auto_highlight=True,
+        highlight_color=[57, 125, 137, 55],
+    )
+
+
+def map_view(projected_geometry, width=460, *, height=MAP_HEIGHT):
     """Fit Web Mercator geometry in the available map space."""
     west, south, east, north = projected_geometry.total_bounds
     centre = Point((west + east) / 2, (south + north) / 2)
     centre = gpd.GeoSeries([centre], crs=3857).to_crs(4326).iloc[0]
     metres_per_pixel = max(
-        (east - west) / width, (north - south) / (MAP_HEIGHT - 100), 5
+        (east - west) / width, (north - south) / (height - 100), 5
     )
     return {
         "longitude": centre.x,
         "latitude": centre.y,
         "zoom": log2(WORLD_METRES_PER_PIXEL / metres_per_pixel),
     }
+
+
+def _road_layer(links):
+    road_data = (
+        links[["link_type", "geometry"]]
+        .reset_index()
+        .rename(columns={"link_id": "Link ID", "link_type": "Link type"})
+    )
+    return PathLayer.from_geopandas(
+        road_data,
+        width_units="pixels",
+        get_width=1.1,
+        get_color=[121, 131, 145, 135],
+        auto_highlight=True,
+    )
+
+
+def _zone_centroids(nodes):
+    return nodes.loc[nodes["is_centroid"].eq(1), ["node_id", "geometry"]].rename(
+        columns={"node_id": "Zone ID"}
+    )
+
+
+def _centroid_layer(centroids, *, visible=True, pickable=True):
+    return ScatterplotLayer.from_geopandas(
+        centroids,
+        radius_units="pixels",
+        get_radius=2.5,
+        get_fill_color=[67, 117, 129],
+        visible=visible,
+        pickable=pickable,
+    )
+
+
+def _network_map(layers, view_state):
+    return WorkshopMap(
+        layers=layers,
+        view_state=view_state,
+        basemap=None,
+        height=MAP_HEIGHT,
+        show_side_panel=False,
+        show_tooltip=True,
+        custom_attribution="© OpenStreetMap contributors",
+    )
+
+
+def _zone_controls(map_widget, zone_view, set_zones_visible):
+    show_zones = widgets.Checkbox(
+        description="SA1 zones", value=True, indent=False, layout={"width": "auto"}
+    )
+    fit_zones = widgets.Button(description="Fit zones", layout={"width": "100px"})
+
+    def fit_view(_):
+        show_zones.value = True
+        map_widget.set_view_state(**zone_view)
+
+    show_zones.observe(lambda change: set_zones_visible(change["new"]), names="value")
+    fit_zones.on_click(fit_view)
+    return show_zones, fit_zones
+
+
+def network_overview(links, nodes, zones, column_names):
+    """Show roads and Census totals as bars at the zone centroids."""
+    employment_labels = {
+        "total": "Census total",
+        **{
+            column: label
+            for label, column in column_names.items()
+            if column not in {"sa1_code_2021", "total"}
+        },
+    }
+    labels = {**ZONE_LABELS, **employment_labels}
+    zone_data = zones.reset_index()[[*labels, "geometry"]].rename(columns=labels)
+    fields = list(employment_labels.values())
+    zone_data[fields] = zone_data[fields].astype("Int64").astype("string").fillna("No data")
+
+    zone_layer = make_zone_layer(zone_data)
+    road_layer = _road_layer(links.set_index("link_id"))
+    population_layers = []
+    bars = _zone_centroids(nodes).merge(zone_data.drop(columns="geometry"), on="Zone ID")
+    totals = bars["Zone ID"].map(zones.set_index("zone_id")["total"])
+    has_population = totals.gt(0).fillna(False)
+    if has_population.any():
+        population_layers.append(
+            ColumnLayer.from_geopandas(
+                bars.loc[has_population].reset_index(drop=True),
+                get_elevation=totals.loc[has_population].to_numpy(dtype=np.float32),
+                elevation_scale=3,
+                radius=70,
+                radius_units="meters",
+                disk_resolution=4,
+                angle=45,
+                flat_shading=True,
+                extruded=True,
+                get_fill_color=[30, 116, 135, 225],
+                auto_highlight=True,
+            )
+        )
+    zone_view = {**map_view(zone_data.geometry.to_crs(3857)), "pitch": 50, "bearing": -15}
+    map_widget = _network_map([zone_layer, road_layer, *population_layers], zone_view)
+
+    def set_zones_visible(visible):
+        zone_layer.visible = visible
+        for layer in population_layers:
+            layer.visible = visible
+
+    controls = widgets.HBox(
+        _zone_controls(map_widget, zone_view, set_zones_visible),
+        layout={"flex_flow": "row wrap", "align_items": "center"},
+    )
+    return widgets.VBox([controls, map_widget])
 
 
 def _included_link_ids(routes):
@@ -150,43 +282,13 @@ class _RouteMap:
     def __init__(self, links, zone_data, centroids, zone_view):
         self.links = links
         self.centroids = centroids
-        self.zone_view = zone_view
         self.routes = {}
         self.overlays = ()
         self.markers = ()
         self.comparing = False
-        self.zone_layer = PolygonLayer.from_geopandas(
-            zone_data,
-            get_fill_color=[57, 125, 137, 25],
-            get_line_color=[67, 117, 129, 210],
-            stroked=True,
-            line_width_units="pixels",
-            get_line_width=1.3,
-            auto_highlight=True,
-            highlight_color=[57, 125, 137, 55],
-        )
-        road_data = (
-            links[["link_type", "geometry"]]
-            .reset_index()
-            .rename(columns={"link_id": "Link ID", "link_type": "Link type"})
-        )
-        self.road_layer = PathLayer.from_geopandas(
-            road_data,
-            width_units="pixels",
-            get_width=1.1,
-            get_color=[121, 131, 145, 135],
-            auto_highlight=True,
-        )
-        self.map = WorkshopMap(
-            layers=[self.zone_layer, self.road_layer],
-            view_state=zone_view,
-            basemap=None,
-            height=MAP_HEIGHT,
-            show_side_panel=False,
-            show_tooltip=True,
-            custom_attribution="© OpenStreetMap contributors",
-        )
-        self.map.add_class("mount-isa-map")
+        self.zone_layer = make_zone_layer(zone_data)
+        self.road_layer = _road_layer(links)
+        self.map = _network_map([self.zone_layer, self.road_layer], zone_view)
 
         self.summary = widgets.HTML()
         self.route_picker = widgets.Dropdown(
@@ -194,20 +296,17 @@ class _RouteMap:
             layout=widgets.Layout(width="min(285px, 100%)"),
             style={"description_width": "auto"},
         )
-        self.show_zones = widgets.Checkbox(
-            description="SA1 zones", value=True, indent=False, layout={"width": "auto"}
+        self.show_zones, fit_zones = _zone_controls(
+            self.map, zone_view, self._set_zones_visible
         )
         show_roads = widgets.Checkbox(
             description="Roads", value=True, indent=False, layout={"width": "auto"}
         )
-        fit_zones = widgets.Button(description="Fit zones", layout={"width": "100px"})
         self.route_picker.observe(self._update_route, names="value")
-        self.show_zones.observe(self._update_zones, names="value")
         show_roads.observe(
             lambda change: setattr(self.road_layer, "visible", change["new"]),
             names="value",
         )
-        fit_zones.on_click(self._fit_zones)
         controls = widgets.HBox(
             [self.route_picker, self.show_zones, show_roads, fit_zones],
             layout={"flex_flow": "row wrap", "align_items": "center"},
@@ -256,11 +355,8 @@ class _RouteMap:
         endpoint_mask = self.centroids["Zone ID"].isin(labels)
         endpoints = self.centroids.loc[endpoint_mask].copy()
         endpoints["Location"] = endpoints["Zone ID"].map(labels)
-        other_centroids = ScatterplotLayer.from_geopandas(
+        other_centroids = _centroid_layer(
             self.centroids.loc[~endpoint_mask],
-            radius_units="pixels",
-            get_radius=2.5,
-            get_fill_color=[67, 117, 129],
             visible=self.show_zones.value,
         )
         endpoint_layer = ScatterplotLayer.from_geopandas(
@@ -298,14 +394,10 @@ class _RouteMap:
         origin, destination = self.od_pair
         self.summary.value = f"<b>Zone {origin} → Zone {destination}</b> · {detail}"
 
-    def _update_zones(self, change):
-        self.zone_layer.visible = change["new"]
+    def _set_zones_visible(self, visible):
+        self.zone_layer.visible = visible
         if self.markers:
-            self.markers[0].visible = change["new"]
-
-    def _fit_zones(self, _):
-        self.show_zones.value = True
-        self.map.set_view_state(**self.zone_view)
+            self.markers[0].visible = visible
 
 
 def _closure_status(baseline, distance, closed_link):
@@ -434,13 +526,9 @@ def route_choice_workshop(routing, links, nodes, zones):
     status = widgets.HTML()
 
     links = links.set_index("link_id")
-    zone_data = zones.reset_index()[["zone_id", "sa1_code_2021", "geometry"]].rename(
-        columns={"zone_id": "Zone ID", "sa1_code_2021": "SA1 code"}
-    )
-    centroids = nodes.loc[nodes["is_centroid"].eq(1), ["node_id", "geometry"]].rename(
-        columns={"node_id": "Zone ID"}
-    )
-    zone_view = _map_view(zone_data.geometry.to_crs(3857))
+    zone_data = zones.reset_index()[[*ZONE_LABELS, "geometry"]].rename(columns=ZONE_LABELS)
+    centroids = _zone_centroids(nodes)
+    zone_view = map_view(zone_data.geometry.to_crs(3857))
     projected_links = links.geometry.to_crs(3857)
     projected_centroids = centroids.set_index("Zone ID").geometry.to_crs(3857)
 
@@ -512,7 +600,7 @@ def route_choice_workshop(routing, links, nodes, zones):
                 ]
             )
             comparison_view = (
-                _map_view(trip_geometry, width=320)
+                map_view(trip_geometry, width=320)
                 if not trip_geometry.empty
                 else zone_view
             )
@@ -527,7 +615,7 @@ def route_choice_workshop(routing, links, nodes, zones):
                 ]
                 panel.set_trip(od_pair, results[method], comparison_view, overlays)
             closure_view = (
-                _map_view(trip_geometry) if not trip_geometry.empty else zone_view
+                map_view(trip_geometry) if not trip_geometry.empty else zone_view
             )
             closure.set_trip(od_pair, results, closure_view)
             status.value = ""
