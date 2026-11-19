@@ -1,60 +1,71 @@
-from aequilibrae import Project, Graph
-from aequilibrae.paths import TrafficAssignment, TrafficClass
+import logging
+
 import numpy as np
-from aequilibrae import logger
+from aequilibrae import Project
+from aequilibrae.routing import Network
+from aequilibrae.traffic import TrafficAssignment, TrafficClass
+from aequilibrae.traffic.vdf import bpr
 
 
-def assignment(proj: Project, carGraph: Graph, truckGraph: Graph, periods: list[str]):
+# Segment, traffic class, AequilibraE mode, OMX matrix, PCE, value of time and toll.
+CLASSES = (
+    ("c", "car", "c", "AUTO", 1.0, 0.2, "hov1tollcost"),
+    ("L", "light_truck", "c", "COMMTRK", 1.5, 0.5, "mttollcost"),
+    ("T", "heavy_truck", "T", "HTRK", 2.5, 1.0, "httollcost"),
+)
+logger = logging.getLogger(__name__)
 
-    results = {}
-    for period in periods:
-        logger.info(f'\n\n Assigning {period.upper()}')
-        proj_matrices = proj.matrices
-        carDemand = proj_matrices.get_matrix(f'{period.upper()}_omx')
-        carDemand.computational_view('AUTO')
 
-        lightTruckDemand = proj_matrices.get_matrix(f'{period.upper()}_omx')
-        lightTruckDemand.computational_view('COMMTRK')
-        lightTruckDemand.matrix_view = np.array(lightTruckDemand.matrix_view, np.float64)
+def load_demand(project: Project, period: str):
+    demand = {}
+    for segment, _, _, matrix, _, _, _ in CLASSES:
+        collection = project.matrices.get_matrix(f"{period.upper()}.omx", subset=[matrix])
+        collection[matrix] = collection[matrix].astype(np.float64, copy=False)
+        demand[segment] = collection
+    return demand
 
-        heavyTruckDemand = proj_matrices.get_matrix(f'{period.upper()}_omx')
-        heavyTruckDemand.computational_view('HTRK')
-        heavyTruckDemand.matrix_view = np.array(heavyTruckDemand.matrix_view, np.float64)
 
-        assig = TrafficAssignment()
-        assig.procedure_id = f'{period}_baseline'
-        carClass = TrafficClass('car', carGraph, carDemand)
-        carClass.set_pce(1)
-        carClass.set_vot(0.2)
-        carClass.set_fixed_cost('hov1tollcost')
+def assign_period(
+    project: Project,
+    network: Network,
+    period: str,
+    *,
+    demand=None,
+    algorithm="bfw",
+    max_iterations=2000,
+    rgap=1e-5,
+    cores=None,
+):
+    logger.info("Assigning %s", period.upper())
+    if demand is None:
+        demand = load_demand(project, period)
 
-        # The link exclusions for commercial trucks are actually the same as the ones for passenger cars, and not heavy trucks
-        lightTruckClass = TrafficClass('light_truck', carGraph, lightTruckDemand)
-        lightTruckClass.set_pce(1.5)
-        lightTruckClass.set_vot(0.5)
-        lightTruckClass.set_fixed_cost("mttollcost")
+    time_field = f"tt_{period}_10"
+    classes = [
+        TrafficClass(
+            name=name,
+            mode=mode,
+            cost=time_field,
+            demand=demand[segment],
+            pce=pce,
+            vot=vot,
+            fixed_cost_field=toll,
+        )
+        for segment, name, mode, _, pce, vot, toll in CLASSES
+    ]
+    assignment = TrafficAssignment(
+        network=network,
+        classes=classes,
+        time_field=time_field,
+        capacity_field=f"{period}_assncap_10",
+        vdf=bpr,
+        name_mapping={"alpha": "alpha", "beta": "beta"},
+        algorithm=algorithm,
+        project=project,
+    )
+    assignment.execute(max_iterations=max_iterations, rgap=rgap, cores=cores)
+    return assignment
 
-        heavyTruckClass = TrafficClass('heavy_truck', truckGraph, heavyTruckDemand)
-        heavyTruckClass.set_pce(2.5)
-        heavyTruckClass.set_vot(1.0)
-        heavyTruckClass.set_fixed_cost("httollcost")
 
-        # The first thing to do is to add at list of traffic classes to be assigned
-        assig.set_classes([heavyTruckClass, carClass, lightTruckClass])
-        assig.set_vdf("BPR")  # This is not case-sensitive # Then we set the volume delay function
-
-        assig.set_vdf_parameters({"alpha": "alpha", "beta": "beta"})  # And its parameters
-
-        assig.set_time_field(f"tt_{period}_10")
-        assig.set_capacity_field(f"{period}_assncap_10")  # The capacity and free flow travel times as they exist in the graph
-
-        # And the algorithm we want to use to assign
-        assig.max_iter = 2000
-        assig.rgap_target = 1e-5
-        # assig.steps_below_needed_to_terminate = 1
-        assig.set_algorithm('bfw')
-
-        assig.execute()  # we then execute the assignment
-
-        results[period] = assig
-    return results
+def assignment(project: Project, network: Network, periods: list[str]):
+    return {period: assign_period(project, network, period) for period in periods}

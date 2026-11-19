@@ -1,23 +1,17 @@
-from os.path import join
-import openmatrix as omx
+import numpy as np
+
+from aequilibrae import Project
 
 
-def format_matrices(proj):
-    proj_matrices = proj.matrices
-    mat_list = proj_matrices.list()
+def format_matrices(project: Project):
+    for file_name in project.matrices.list().index:
+        with project.matrices.get_matrix(file_name) as store:
+            if "AUTO" in store:
+                continue
+            car_names = [name for name in store if name not in {"COMMTRK", "HTRK"}]
+            all_cars = np.zeros(store.shape, dtype=np.float64)
+            for name in car_names:
+                all_cars += store[name]
 
-    auto = 'AUTO'
-    for idx, mat_record in mat_list.iterrows():
-        rec = proj_matrices.get_record(mat_record['name'])
-        
-        demand = proj_matrices.get_matrix(mat_record['name'])
-        if auto in demand.names:
-            continue
-        cores = [core for core in demand.names if core not in ['COMMTRK', 'HTRK']]
-        demand.computational_view(cores)
-        all_cars = demand.matrix_view.sum(axis=2)
-        demand.close()
-        omx_file = omx.open_file(join(rec.fldr, rec.file_name), 'a')
-        omx_file[auto] = all_cars
-        omx_file.close()
-    del demand
+        with project.matrices.get_matrix(file_name, mode="r+") as store:
+            store["AUTO"] = all_cars

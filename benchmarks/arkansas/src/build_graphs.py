@@ -1,57 +1,51 @@
-def build_graphs(proj):
-    net = proj.network
-    modes = net.modes
-    modes.all_modes()
+import numpy as np
 
-    with proj.db_connection as conn:
-        conn.execute("update nodes set is_centroid = 0 where node_id in (4701, 4702, 4703)")
-
-    net.build_graphs(modes=['T'])
-    truckGraph = net.graphs['T']
-    net.build_graphs(modes=['c'])
-    carGraph = net.graphs['c']
-
-    # Link exclusions
-    with proj.db_connection as conn:
-        sql = "select link_id from links where exclusionset IN ('TruckOnly', 'HOV2', 'HOV3')"
-        exclude_from_passenger = [x[0] for x in conn.execute(sql).fetchall()]
-
-        sql = "select link_id from links where exclusionset IN ('PassengerOnly', 'HOV2', 'HOV3')"
-        exclude_from_truck = [x[0] for x in conn.execute(sql).fetchall()]
+from aequilibrae import Project
+from aequilibrae.routing import Network
 
 
-    graph = truckGraph
-    set1 = graph.network[
-        (graph.network.builtyear > 2010) | (graph.network.removedyear < 2010)
-        | (graph.network.builtyear.isna() & graph.network.removedyear.isna())
-    ].link_id.to_list()
-    set2 = graph.network[(graph.network.mode_code <10) | (graph.network.mode_code >11)].link_id.to_list()
-    exclude_from_passenger.extend(set1 + set2)
-    exclude_from_truck.extend(set1 + set2)
-
-    truckGraph.exclude_links(exclude_from_truck)
-    carGraph.exclude_links(exclude_from_passenger)
-
-    with proj.db_connection as conn:
-        conn.execute("update nodes set is_centroid = 0 where node_id in (4701, 4702, 4703)")
-
-    for graph in [carGraph, truckGraph]:
-        graph.network.alpha_ab = graph.network.alpha_ab.fillna(0.15)
-        graph.network.alpha_ba = graph.network.alpha_ba.fillna(0.15)
-        
-        graph.network.beta_ab = graph.network.beta_ab.fillna(4.0)
-        graph.network.beta_ba = graph.network.beta_ba.fillna(4.0)
-        graph.network.hov1tollcost = graph.network.hov1tollcost.fillna(0)
-        graph.network.mttollcost = graph.network.mttollcost.fillna(0)
-        graph.network.httollcost = graph.network.httollcost.fillna(0)
-
-        for period in ['am', 'pm', 'md', 'nt']:
-            graph.network.loc[graph.network.a_node == graph.network.b_node, f"{period}_assncap_10_ab"] = 1.0
-            graph.network.loc[graph.network.a_node == graph.network.b_node, f"{period}_assncap_10_ba"] = 1.0
-            graph.network.loc[graph.network.a_node == graph.network.b_node, f"tt_{period}_10_ab"] = 0.001
-            graph.network.loc[graph.network.a_node == graph.network.b_node, f"tt_{period}_10_ba"] = 0.001
-    
-        graph.prepare_graph(graph.centroids)
+PERIODS = ("am", "md", "pm", "nt")
+TOLL_FIELDS = ("hov1tollcost", "mttollcost", "httollcost")
 
 
-    return carGraph, truckGraph
+def build_network(project: Project, periods=PERIODS) -> Network:
+    fields = [
+        "distance", "builtyear", "removedyear", "mode_code", "exclusionset", "alpha", "beta", *TOLL_FIELDS
+    ]
+    for period in periods:
+        fields.extend((f"tt_{period}_10", f"{period}_assncap_10"))
+    source = project.road.build_network(fields=fields, modes=["c", "T"])
+
+    # These three nodes are outside the OMX zone index.
+    centroids = source.centroids[~np.isin(source.centroids, [4701, 4702, 4703])]
+    links = source.links
+    connectors = links["a_node"].isin(centroids) | links["b_node"].isin(centroids)
+    outside_model_year = (
+        links["builtyear"].gt(2010)
+        | links["removedyear"].lt(2010)
+        | (links["builtyear"].isna() & links["removedyear"].isna())
+    )
+    outside_road_modes = links["mode_code"].lt(10) | links["mode_code"].gt(11)
+    road_links = ~(outside_model_year | outside_road_modes)
+    links = links.loc[(connectors | road_links) & links["a_node"].ne(links["b_node"])].copy()
+
+    exclusions = links["exclusionset"]
+    passenger = links["modes"].str.contains("c", regex=False) & ~exclusions.isin(("TruckOnly", "HOV2", "HOV3"))
+    truck = links["modes"].str.contains("T", regex=False) & ~exclusions.isin(("PassengerOnly", "HOV2", "HOV3"))
+    links["modes"] = passenger.map({True: "c", False: ""}) + truck.map({True: "T", False: ""})
+
+    defaults = {field: 0.0 for field in TOLL_FIELDS}
+    for direction in ("ab", "ba"):
+        defaults[f"alpha_{direction}"] = 0.15
+        defaults[f"beta_{direction}"] = 4.0
+        for period in periods:
+            defaults[f"tt_{period}_10_{direction}"] = 0.001
+            defaults[f"{period}_assncap_10_{direction}"] = 1.0
+
+    return Network(
+        links.fillna(defaults),
+        modes=source.modes,
+        centroids=centroids,
+        allow_uturns=source.allow_uturns,
+        lonlat=source.lonlat,
+    )
