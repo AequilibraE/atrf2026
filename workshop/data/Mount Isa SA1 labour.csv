@@ -1,13 +1,13 @@
 Australian Bureau of Statistics
 
 "2021 Census - counting persons, place of usual residence"
-"SA1 (UR) by 1-digit level INDP Industry of Employment"
+"SA1 (UR) by Labour by industry (INDP, 1-digit level)"
 "Counting: Person Records"
 
 Filters:
 "Default summation","Person Records"
 
-"1-digit level INDP Industry of Employment","Agriculture, Forestry and Fishing","Mining","Manufacturing","Electricity, Gas, Water and Waste Services","Construction","Wholesale Trade","Retail Trade","Accommodation and Food Services","Transport, Postal and Warehousing","Information Media and Telecommunications","Financial and Insurance Services","Rental, Hiring and Real Estate Services","Professional, Scientific and Technical Services","Administrative and Support Services","Public Administration and Safety","Education and Training","Health Care and Social Assistance","Arts and Recreation Services","Other Services","Inadequately described","Not stated","Not applicable","Total",
+"Labour by industry (INDP, 1-digit level)","Agriculture, Forestry and Fishing","Mining","Manufacturing","Electricity, Gas, Water and Waste Services","Construction","Wholesale Trade","Retail Trade","Accommodation and Food Services","Transport, Postal and Warehousing","Information Media and Telecommunications","Financial and Insurance Services","Rental, Hiring and Real Estate Services","Professional, Scientific and Technical Services","Administrative and Support Services","Public Administration and Safety","Education and Training","Health Care and Social Assistance","Arts and Recreation Services","Other Services","Inadequately described","Not stated","Not applicable","Total",
 "SA1 (UR)",
 "31502140601",20,22,6,5,13,4,10,7,25,0,0,0,3,3,15,7,28,4,12,0,5,175,361,
 "31502140602",4,36,5,3,7,0,9,10,27,0,0,0,3,3,17,14,18,0,0,0,4,145,311,

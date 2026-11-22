@@ -155,7 +155,7 @@ def _zone_controls(map_widget, zone_view, set_zones_visible):
 
 def network_overview(links, nodes, zones, column_names):
     """Show roads and Census totals as bars at the zone centroids."""
-    employment_labels = {
+    labour_labels = {
         "total": "Census total",
         **{
             column: label
@@ -163,9 +163,9 @@ def network_overview(links, nodes, zones, column_names):
             if column not in {"sa1_code_2021", "total"}
         },
     }
-    labels = {**ZONE_LABELS, **employment_labels}
+    labels = {**ZONE_LABELS, **labour_labels}
     zone_data = zones.reset_index()[[*labels, "geometry"]].rename(columns=labels)
-    fields = list(employment_labels.values())
+    fields = list(labour_labels.values())
     zone_data[fields] = (
         zone_data[fields].astype("Int64").astype("string").fillna("No data")
     )

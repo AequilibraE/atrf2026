@@ -18,7 +18,7 @@ AequilibraE supports Python **3.11, 3.12, 3.13 and 3.14**. The commands below us
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) from PowerShell, then open a new terminal so it is on your `PATH`.
 
 ```powershell
-winget install --exact --id astral-sh.uv
+winget install --source winget --exact --id astral-sh.uv
 ```
 
 **Do not use Python from the Microsoft Store.** Its SQLite build cannot load the SpatiaLite extension required by AequilibraE. The commands below use a uv-managed Python. On Windows x86-64, AequilibraE downloads SpatiaLite on first use if needed. See the [AequilibraE installation guide](https://www.aequilibrae.com/develop/python/useful_links/installation.html).
