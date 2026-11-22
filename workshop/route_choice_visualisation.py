@@ -10,22 +10,13 @@ import ipywidgets as widgets
 import numpy as np
 import pandas as pd
 from lonboard import ColumnLayer, Map, PathLayer, PolygonLayer, ScatterplotLayer
+from matplotlib import colormaps
 from shapely.geometry import Point
 
 MAP_HEIGHT = 900
+ROUTE_WIDTH = 6
+ROUTE_COLOUR_MAP = "inferno_r"
 WORLD_METRES_PER_PIXEL = 40_075_017 / 512
-ROUTE_COLOURS = (
-    (31, 119, 180),
-    (255, 127, 14),
-    (44, 160, 44),
-    (214, 39, 40),
-    (148, 103, 189),
-    (140, 86, 75),
-    (227, 119, 194),
-    (127, 127, 127),
-    (188, 189, 34),
-    (23, 190, 207),
-)
 SHARED_COLOUR = (33, 121, 121)
 METHOD_COLOURS = {"BFSLE": (182, 79, 26), "LP": (120, 66, 156)}
 ZONE_LABELS = {"zone_id": "Zone ID", "sa1_code_2021": "SA1 code"}
@@ -95,9 +86,7 @@ def map_view(projected_geometry, width=460, *, height=MAP_HEIGHT):
     west, south, east, north = projected_geometry.total_bounds
     centre = Point((west + east) / 2, (south + north) / 2)
     centre = gpd.GeoSeries([centre], crs=3857).to_crs(4326).iloc[0]
-    metres_per_pixel = max(
-        (east - west) / width, (north - south) / (height - 100), 5
-    )
+    metres_per_pixel = max((east - west) / width, (north - south) / (height - 100), 5)
     return {
         "longitude": centre.x,
         "latitude": centre.y,
@@ -142,7 +131,7 @@ def _network_map(layers, view_state):
         layers=layers,
         view_state=view_state,
         basemap=None,
-        height=MAP_HEIGHT,
+        # height=MAP_HEIGHT,
         show_side_panel=False,
         show_tooltip=True,
         custom_attribution="© OpenStreetMap contributors",
@@ -177,12 +166,16 @@ def network_overview(links, nodes, zones, column_names):
     labels = {**ZONE_LABELS, **employment_labels}
     zone_data = zones.reset_index()[[*labels, "geometry"]].rename(columns=labels)
     fields = list(employment_labels.values())
-    zone_data[fields] = zone_data[fields].astype("Int64").astype("string").fillna("No data")
+    zone_data[fields] = (
+        zone_data[fields].astype("Int64").astype("string").fillna("No data")
+    )
 
     zone_layer = make_zone_layer(zone_data)
     road_layer = _road_layer(links.set_index("link_id"))
     population_layers = []
-    bars = _zone_centroids(nodes).merge(zone_data.drop(columns="geometry"), on="Zone ID")
+    bars = _zone_centroids(nodes).merge(
+        zone_data.drop(columns="geometry"), on="Zone ID"
+    )
     totals = bars["Zone ID"].map(zones.set_index("zone_id")["total"])
     has_population = totals.gt(0).fillna(False)
     if has_population.any():
@@ -201,7 +194,11 @@ def network_overview(links, nodes, zones, column_names):
                 auto_highlight=True,
             )
         )
-    zone_view = {**map_view(zone_data.geometry.to_crs(3857)), "pitch": 50, "bearing": -15}
+    zone_view = {
+        **map_view(zone_data.geometry.to_crs(3857)),
+        "pitch": 50,
+        "bearing": -15,
+    }
     map_widget = _network_map([zone_layer, road_layer, *population_layers], zone_view)
 
     def set_zones_visible(visible):
@@ -242,6 +239,19 @@ def _swatch(colour):
     return f'<span style="color:rgb({rgb})" aria-hidden="true">●</span>'
 
 
+def _route_colour_bar():
+    colours = colormaps[ROUTE_COLOUR_MAP](np.linspace(0, 1, 32), bytes=True)
+    stops = ", ".join(f"#{r:02x}{g:02x}{b:02x}" for r, g, b, _ in colours)
+    return widgets.HTML(
+        '<div style="width:100%;max-width:320px">'
+        '<div>Route cost rank</div>'
+        f'<div aria-hidden="true" style="height:12px;'
+        f'background:linear-gradient(to left,{stops})"></div>'
+        '<div style="display:flex;justify-content:space-between">'
+        "<span>Highest cost</span><span>Lowest cost</span></div></div>"
+    )
+
+
 @dataclass
 class _MapRoute:
     layer: PathLayer
@@ -253,6 +263,8 @@ class _MapRoute:
 def _make_route_layers(routes, links):
     columns = ["route set", "cost", "probability", "mask"]
     ordered = routes.sort_values("cost", kind="stable")[columns]
+    positions = [0.5] if len(ordered) == 1 else np.linspace(0, 1, len(ordered))
+    colours = colormaps[ROUTE_COLOUR_MAP](positions, bytes=True)[:, :3].tolist()
     layers = {}
     for number, (link_ids, cost, probability, included) in enumerate(
         ordered.itertuples(index=False, name=None), start=1
@@ -261,12 +273,13 @@ def _make_route_layers(routes, links):
         details = {"Route": label, "Distance": f"{cost / 1000:.2f} km"}
         if included and pd.notna(probability):
             details["Probability"] = f"{100 * probability:.3g}%"
-        colour = ROUTE_COLOURS[(number - 1) % len(ROUTE_COLOURS)]
+        colour = colours[number - 1]
         data = links.loc[link_ids, ["geometry"]].assign(**details)
         layer = PathLayer.from_geopandas(
             data,
             width_units="pixels",
-            get_width=4,
+            get_width=ROUTE_WIDTH,
+            cap_rounded=True,
             get_color=[*colour, 215],
             auto_highlight=True,
             visible=included,
@@ -383,7 +396,9 @@ class _RouteMap:
         for number, route in self.routes.items():
             visible = route.included if selected is None else number == selected
             route.layer.visible = visible and not self.comparing
-            route.layer.get_width = 4 if selected is None else 5.5
+            route.layer.get_width = (
+                ROUTE_WIDTH if selected is None else ROUTE_WIDTH + 1.5
+            )
         if selected is not None and not self.comparing:
             detail = self.routes[selected].summary
         elif self.routes:
@@ -526,7 +541,9 @@ def route_choice_workshop(routing, links, nodes, zones):
     status = widgets.HTML()
 
     links = links.set_index("link_id")
-    zone_data = zones.reset_index()[[*ZONE_LABELS, "geometry"]].rename(columns=ZONE_LABELS)
+    zone_data = zones.reset_index()[[*ZONE_LABELS, "geometry"]].rename(
+        columns=ZONE_LABELS
+    )
     centroids = _zone_centroids(nodes)
     zone_view = map_view(zone_data.geometry.to_crs(3857))
     projected_links = links.geometry.to_crs(3857)
@@ -548,10 +565,12 @@ def route_choice_workshop(routing, links, nodes, zones):
         description="Compare link use", indent=False, layout={"width": "auto"}
     )
     legend = widgets.HTML(layout={"display": "none"})
+    route_colour_bar = _route_colour_bar()
 
     def toggle_comparison(change):
         enabled = change["new"]
         legend.layout.display = "" if enabled else "none"
+        route_colour_bar.layout.display = "none" if enabled else ""
         for panel in maps.values():
             panel.show_comparison(enabled)
 
@@ -566,9 +585,9 @@ def route_choice_workshop(routing, links, nodes, zones):
     row = widgets.HBox(
         panels, layout={"flex_flow": "row wrap", "align_items": "flex-start"}
     )
-    comparison = widgets.VBox([compare_links, legend, row])
+    comparison = widgets.VBox([compare_links, legend, route_colour_bar, row])
     tabs = widgets.Tab(
-        children=[comparison, closure.widget],
+        children=[comparison, widgets.VBox([_route_colour_bar(), closure.widget])],
         titles=["BFSLE vs LP", "Close a link"],
     )
 
