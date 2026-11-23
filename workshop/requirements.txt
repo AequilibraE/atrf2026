@@ -3,7 +3,7 @@ osmnx>=2.1,<3
 overturemaps>=1.0
 geopandas
 pandas
-aequilibrae==2.0.0rc1
+aequilibrae==2.0.0rc2
 ipywidgets
 lonboard
 matplotlib
