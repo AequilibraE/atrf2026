@@ -4,37 +4,35 @@ import geopandas as gpd
 import ipywidgets as widgets
 import numpy as np
 from lonboard import PathLayer
+from matplotlib import colormaps
 
 from route_choice_visualisation import WorkshopMap, make_zone_layer, map_view
 
 MAP_HEIGHT = 540
 VOC_OPTIONS = {"Maximum": "VOC_max", "A to B": "VOC_AB", "B to A": "VOC_BA"}
-VOC_BREAKS = (0.5, 0.8, 1.0)
-VOC_LABELS = (
-    "Below 0.5",
-    "0.5 to below 0.8",
-    "0.8 to below 1.0",
-    "1.0 or more",
-    "No data",
-)
-VOC_COLOURS = np.array(
-    [(38, 128, 123), (199, 154, 51), (215, 97, 34), (173, 36, 56), (143, 151, 162)],
-    dtype=np.uint8,
-)
+VOC_COLOUR_MAP = colormaps["inferno"]
+VOC_COLOUR_MAX = 3
+NO_DATA_COLOUR = (143, 151, 162)
 CORDON_COLOUR = (229, 91, 53)
 
 
-def _voc_legend(show_no_data):
-    labels = VOC_LABELS if show_no_data else VOC_LABELS[:-1]
-    swatches = []
-    for label, colour in zip(labels, VOC_COLOURS):
-        rgb = ", ".join(map(str, colour))
-        swatches.append(
-            f'<span style="white-space: nowrap"><span style="color: rgb({rgb})" '
-            f'aria-hidden="true">●</span> {label}</span>'
-        )
+def _voc_colour_bar(show_no_data):
+    colours = VOC_COLOUR_MAP(np.linspace(0, 1, 32), bytes=True)
+    stops = ", ".join(f"#{r:02x}{g:02x}{b:02x}" for r, g, b, _ in colours)
+    no_data = ""
+    if show_no_data:
+        rgb = ", ".join(map(str, NO_DATA_COLOUR))
+        no_data = f'<div><span style="color:rgb({rgb})" aria-hidden="true">●</span> No data</div>'
     return widgets.HTML(
-        "<b>Volume-to-capacity ratio</b> &nbsp; " + " &nbsp; ".join(swatches)
+        '<div style="width:100%;max-width:320px">'
+        '<div>Volume-to-capacity ratio</div>'
+        f'<div aria-hidden="true" style="height:12px;'
+        f'background:linear-gradient(to right,{stops})"></div>'
+        '<div style="display:flex;justify-content:space-between">'
+        f"<span>0</span><span>{VOC_COLOUR_MAX / 2:g}</span>"
+        f"<span>{VOC_COLOUR_MAX:g}+</span></div>"
+        f"{no_data}</div>",
+        layout={"width": "320px", "max_width": "100%"},
     )
 
 
@@ -53,10 +51,10 @@ def show_link_results(links, results, zones, *, volume_options=None, cordon=None
         values["VOC_BA"] = values["VOC_BA"].mask(values["direction"] == 1)
 
     def colours(column):
-        ratios = values[column].to_numpy()
-        bands = np.digitize(ratios, VOC_BREAKS)
-        bands[np.isnan(ratios)] = len(VOC_LABELS) - 1
-        return VOC_COLOURS[bands]
+        ratios = values[column].to_numpy(dtype=float, na_value=np.nan)
+        rgb = VOC_COLOUR_MAP(ratios / VOC_COLOUR_MAX, bytes=True)[:, :3].copy()
+        rgb[~np.isfinite(ratios)] = NO_DATA_COLOUR
+        return rgb
 
     picker = widgets.Dropdown(
         options=volume_options or voc_options,
@@ -88,6 +86,7 @@ def show_link_results(links, results, zones, *, volume_options=None, cordon=None
         map_links,
         get_width=width,
         get_color=colour,
+        cap_rounded=True,
         width_units="pixels",
         auto_highlight=True,
     )
@@ -110,7 +109,7 @@ def show_link_results(links, results, zones, *, volume_options=None, cordon=None
     )
 
     layers = [zone_layer, layer]
-    legend_items = [_voc_legend(show_no_data=not volume_options)]
+    legend_items = [_voc_colour_bar(show_no_data=not volume_options)]
     if cordon is not None:
         boundary = gpd.GeoDataFrame(geometry=[cordon.boundary], crs=links.crs)
         layers.append(

@@ -15,10 +15,13 @@ from shapely.geometry import Point
 
 MAP_HEIGHT = 900
 ROUTE_WIDTH = 6
-ROUTE_COLOUR_MAP = "inferno_r"
+ROUTE_COLOUR_MAP = "inferno"
+ROUTE_COLOUR_MAP_r = ROUTE_COLOUR_MAP + "_r"
 WORLD_METRES_PER_PIXEL = 40_075_017 / 512
-SHARED_COLOUR = (33, 121, 121)
-METHOD_COLOURS = {"BFSLE": (182, 79, 26), "LP": (120, 66, 156)}
+SHARED_COLOUR, BFSLE_COLOUR, LP_COLOUR = colormaps[ROUTE_COLOUR_MAP_r](
+    [0.15, 0.45, 0.75], bytes=True
+)[:, :3].tolist()
+METHOD_COLOURS = {"BFSLE": BFSLE_COLOUR, "LP": LP_COLOUR}
 ZONE_LABELS = {"zone_id": "Zone ID", "sa1_code_2021": "SA1 code"}
 
 
@@ -240,11 +243,11 @@ def _swatch(colour):
 
 
 def _route_colour_bar():
-    colours = colormaps[ROUTE_COLOUR_MAP](np.linspace(0, 1, 32), bytes=True)
+    colours = colormaps[ROUTE_COLOUR_MAP_r](np.linspace(0, 1, 32), bytes=True)
     stops = ", ".join(f"#{r:02x}{g:02x}{b:02x}" for r, g, b, _ in colours)
     return widgets.HTML(
         '<div style="width:100%;max-width:320px">'
-        '<div>Route cost rank</div>'
+        "<div>Route cost rank</div>"
         f'<div aria-hidden="true" style="height:12px;'
         f'background:linear-gradient(to left,{stops})"></div>'
         '<div style="display:flex;justify-content:space-between">'
@@ -264,7 +267,7 @@ def _make_route_layers(routes, links):
     columns = ["route set", "cost", "probability", "mask"]
     ordered = routes.sort_values("cost", kind="stable")[columns]
     positions = [0.5] if len(ordered) == 1 else np.linspace(0, 1, len(ordered))
-    colours = colormaps[ROUTE_COLOUR_MAP](positions, bytes=True)[:, :3].tolist()
+    colours = colormaps[ROUTE_COLOUR_MAP_r](positions, bytes=True)[:, :3].tolist()
     layers = {}
     for number, (link_ids, cost, probability, included) in enumerate(
         ordered.itertuples(index=False, name=None), start=1
